@@ -3,8 +3,8 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.core.errors import NotFoundError, ProviderAuthError
 from gateway_app.core.logging import get_logger
@@ -53,14 +53,14 @@ async def list_keys(
     session: AsyncSession, account_id: int | None = None
 ) -> list[dict[str, Any]]:
     """Список ключей (опц. по аккаунту) с именем аккаунта для UI (FR-2.3)."""
-    stmt = select(orm.ProviderKey).order_by(orm.ProviderKey.account_id, orm.ProviderKey.created_at.desc())  # type: ignore[attr-defined]
+    stmt = select(orm.ProviderKey).order_by(orm.ProviderKey.account_id, orm.ProviderKey.created_at.desc())  # type: ignore[arg-type,attr-defined]
     if account_id:
         stmt = stmt.where(orm.ProviderKey.account_id == account_id)  # type: ignore[attr-defined]
     rows = (await session.exec(stmt)).all()
     names: dict[int, str] = {}
     if rows:
         accs = (await session.exec(select(orm.Account))).all()
-        names = {a.id: a.name for a in accs}
+        names = {a.id: a.name for a in accs}  # type: ignore[misc]
     return [provider_key_out(r, names.get(r.account_id, "")) for r in rows]
 
 
@@ -112,7 +112,7 @@ async def create_manual_key(
     model_limits: list[str] | None,
 ) -> orm.ProviderKey:
     """FR-2.2: ручное создание ключа."""
-    account = get_account(session, account_id)
+    account = await get_account(session, account_id)
     spec = CreateTokenSpec(
         name=name or "agw-manual",
         unlimited_quota=unlimited_quota,
@@ -153,10 +153,10 @@ async def toggle_provider_key(
 ) -> orm.ProviderKey:
     """FR-2.3: включить/выключить — PUT статуса у провайдера (new-api: 1=активен, 2=выключен)."""
     row = await get_provider_key(session, key_id)
-    account = get_account(session, row.account_id)
+    account = await get_account(session, row.account_id)
     creds: ProviderCredentials = creds_of(box, account)
     await adapter.update_token(
-        creds, row.provider_token_id, {"status": 1 if enabled else 2}
+        creds, row.provider_token_id, {"status": 1 if enabled else 2}  # type: ignore[arg-type]
     )
     row.status = orm.KeyStatus.active if enabled else orm.KeyStatus.disabled
     session.add(row)
@@ -170,7 +170,7 @@ async def delete_provider_key(
 ) -> None:
     """FR-2.3: удалить у провайдера + локально."""
     row = await get_provider_key(session, key_id)
-    account = get_account(session, row.account_id)
+    account = await get_account(session, row.account_id)
     creds = creds_of(box, account)
     if row.provider_token_id is not None:
         try:
@@ -191,8 +191,8 @@ async def rename_provider_key(
     session: AsyncSession, adapter: ProviderAdapter, box: SecretBox, key_id: int, name: str
 ) -> orm.ProviderKey:
     row = await get_provider_key(session, key_id)
-    account = get_account(session, row.account_id)
-    await adapter.update_token(creds_of(box, account), row.provider_token_id, {"name": name})
+    account = await get_account(session, row.account_id)
+    await adapter.update_token(creds_of(box, account), row.provider_token_id, {"name": name})  # type: ignore[arg-type]
     row.name = name
     session.add(row)
     await session.commit()
@@ -221,7 +221,7 @@ async def sync_keys_usage(session: AsyncSession, adapter: ProviderAdapter, box: 
             )
         ).all()
         for k in local_keys:
-            info = by_id.get(k.provider_token_id)
+            info = by_id.get(k.provider_token_id)  # type: ignore[arg-type]
             if info is None:
                 continue
             k.used_quota = info.used_quota

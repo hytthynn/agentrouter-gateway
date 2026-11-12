@@ -227,6 +227,9 @@ _ALREADY_MARKERS = (
     "duplicate",
     "today",
     "signed in",
+    "уже",
+    "чекин",
+    "сегодня",
 )
 
 

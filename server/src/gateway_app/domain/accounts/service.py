@@ -3,8 +3,8 @@
 import json
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.automation.tasks import AutomationTask
 from gateway_app.core.errors import (
@@ -107,7 +107,7 @@ async def create_account_row(
 async def patch_account(
     session: AsyncSession, account_id: int, *, name: str | None, base_url: str | None, enabled: bool | None
 ) -> orm.Account:
-    row = get_account(session, account_id)
+    row = await get_account(session, account_id)
     if name is not None:
         row.name = name
     if base_url is not None:
@@ -131,7 +131,7 @@ async def delete_account(
     purge_provider_keys: bool,
 ) -> tuple[int, list[str]]:
     """Удалить аккаунт; опционально удалить ключи у провайдера (FR-1.4). Каскад локальный."""
-    row = get_account(session, account_id)
+    row = await get_account(session, account_id)
     deleted_remote = 0
     errors: list[str] = []
     if purge_provider_keys:
@@ -159,7 +159,7 @@ async def delete_account(
 
 async def add_account_flow(
     task: AutomationTask,
-    session_factory,
+    session_factory: Any,
     adapter: ProviderAdapter,
     data: dict[str, Any],
     *,
@@ -260,7 +260,9 @@ async def add_account_flow(
     return {"account_id": account.id, "name": account.name}
 
 
-async def relogin_flow(task: AutomationTask, session_factory, adapter: ProviderAdapter, account_id: int) -> dict:
+async def relogin_flow(
+    task: AutomationTask, session_factory: Any, adapter: ProviderAdapter, account_id: int
+) -> dict[str, Any]:
     """Перелогин аккаунта (FR-1.5, §2.3): OAuth через сохранённые креды → новая сессия."""
     from gateway_app.automation.github_login import github_oauth_login
     from gateway_app.core.config import get_config
@@ -343,7 +345,7 @@ async def refresh_balance(
 
 
 async def refresh_balance_by_id(session: AsyncSession, adapter: ProviderAdapter, box: SecretBox, account_id: int) -> orm.Account:
-    account = get_account(session, account_id)
+    account = await get_account(session, account_id)
     return await refresh_balance(session, adapter, box, account)
 
 

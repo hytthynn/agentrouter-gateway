@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: d149f4876b02
+Revision ID: dd817c778bc3
 Revises:
-Create Date: 2026-11-12 21:36:05.753794
+Create Date: 2026-11-12 22:16:14.537791
 """
 from collections.abc import Sequence
 
@@ -11,7 +11,7 @@ import sqlmodel
 from alembic import op
 
 
-revision: str = 'd149f4876b02'
+revision: str = 'dd817c778bc3'
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -84,7 +84,7 @@ def upgrade() -> None:
     sa.Column('enabled', sa.Boolean(), nullable=False),
     sa.Column('added_from_account_id', sa.Integer(), nullable=True),
     sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.ForeignKeyConstraint(['added_from_account_id'], ['accounts.id'], ),
+    sa.ForeignKeyConstraint(['added_from_account_id'], ['accounts.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('model_id')
     )
     op.create_table('provider_keys',
@@ -133,8 +133,8 @@ def upgrade() -> None:
     sa.Column('error_message', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('attempts', sa.JSON(), nullable=True),
     sa.Column('client_ua', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ),
-    sa.ForeignKeyConstraint(['gateway_key_id'], ['gateway_keys.id'], ),
+    sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['gateway_key_id'], ['gateway_keys.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('request_logs', schema=None) as batch_op:
@@ -152,7 +152,7 @@ def upgrade() -> None:
     sa.Column('account_id', sa.Integer(), nullable=True),
     sa.Column('message', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('details', sa.JSON(), nullable=True),
-    sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ),
+    sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('system_logs', schema=None) as batch_op:
@@ -164,11 +164,11 @@ def upgrade() -> None:
     op.create_table('account_models',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('account_id', sa.Integer(), nullable=False),
-    sa.Column('model_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('model_id', sa.String(), nullable=False),
     sa.Column('available', sa.Boolean(), nullable=False),
     sa.Column('checked_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
     sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['model_id'], ['models.model_id'], ),
+    sa.ForeignKeyConstraint(['model_id'], ['models.model_id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('account_id', 'model_id')
     )

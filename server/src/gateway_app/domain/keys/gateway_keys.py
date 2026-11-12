@@ -3,8 +3,8 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.core.errors import NotFoundError
 from gateway_app.core.security import SecretBox, mask_secret

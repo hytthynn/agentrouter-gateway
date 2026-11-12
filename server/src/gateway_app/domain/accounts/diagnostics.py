@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.core.security import SecretBox
 from gateway_app.domain.accounts.base import creds_of, get_account
@@ -14,7 +14,7 @@ async def diagnose_account(
     session: AsyncSession, adapter: Any, box: SecretBox, account_id: int
 ) -> dict[str, Any]:
     """Последовательные проверки → карточка с зелёными/красными пунктами."""
-    account = get_account(session, account_id)
+    account = await get_account(session, account_id)
     creds = creds_of(box, account)
     checks: list[dict[str, Any]] = []
 
@@ -38,7 +38,7 @@ async def diagnose_account(
     # 2. Ключ провайдера → /v1/models апстрима (WAF-вердикт, транспорт)
     api_key: str | None = None
     try:
-        _, api_key = await pick_active_key_for_account(session, box, account.id)
+        _, api_key = await pick_active_key_for_account(session, box, account.id or 0)
         headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
         url = account.base_url.rstrip("/") + "/v1/models"
         status, body, text = await transport.request_json("GET", url, headers=headers, timeout_s=20)

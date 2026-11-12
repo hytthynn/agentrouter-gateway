@@ -1,7 +1,7 @@
 """Client-профили имперсонации: разрешение имени → (User-Agent, доп. заголовки) из БД (§10.2)."""
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.db import orm
 from gateway_app.db.seed import SEED_PROFILES

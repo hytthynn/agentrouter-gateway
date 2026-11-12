@@ -48,7 +48,7 @@ def main() -> int:
 
         cfg = get_config()
         cfg.ensure_dirs()
-        ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+        ini = Path(__file__).resolve().parents[2] / "alembic.ini"
         alembic_cfg = Config(str(ini))
         alembic_cfg.set_main_option("sqlalchemy.url", cfg.db_url_sync)
         command.upgrade(alembic_cfg, "head")

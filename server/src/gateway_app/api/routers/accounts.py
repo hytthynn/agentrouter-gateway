@@ -52,7 +52,7 @@ async def add_account(body: AccountCreateIn) -> dict[str, Any]:
 
 @router.get("/{account_id}")
 async def get_account(account_id: int, session: SessionDep) -> dict[str, Any]:
-    row = accounts_service.get_account(session, account_id)
+    row = await accounts_service.get_account(session, account_id)
     return {"success": True, "data": accounts_service.account_out(row)}
 
 
@@ -102,7 +102,7 @@ async def refresh(account_id: int, session: SessionDep) -> dict[str, Any]:
 
 @router.post("/{account_id}/relogin", status_code=202)
 async def relogin(account_id: int, session: SessionDep) -> dict[str, Any]:
-    accounts_service.get_account(session, account_id)
+    await accounts_service.get_account(session, account_id)
     task = manager.create("relogin", account_id=account_id)
     spawn(
         manager.run(
@@ -120,7 +120,7 @@ async def diagnose(account_id: int, session: SessionDep) -> dict[str, Any]:
 
 @router.get("/{account_id}/models")
 async def account_models(account_id: int, session: SessionDep) -> dict[str, Any]:
-    accounts_service.get_account(session, account_id)
+    await accounts_service.get_account(session, account_id)
     links = (
         await session.exec(
             select(orm.AccountModel).where(orm.AccountModel.account_id == account_id)  # type: ignore[attr-defined]

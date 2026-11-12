@@ -1,8 +1,8 @@
 """Пул аккаунтов для маршрутизации (FR-6.3): активные, с моделью, с балансом; probation — в конец."""
 
 from sqlalchemy import or_
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.db import orm
 
@@ -13,7 +13,7 @@ async def candidates_for_model(session: AsyncSession, model_id: str) -> list[orm
         await session.exec(
             select(orm.Account).where(  # type: ignore[attr-defined]
                 orm.Account.status == orm.AccountStatus.active,
-                or_(orm.Account.balance_quota.is_(None), orm.Account.balance_quota > 0),
+                or_(orm.Account.balance_quota.is_(None), orm.Account.balance_quota > 0),  # type: ignore[arg-type,operator,union-attr]
             )
         )
     ).all()

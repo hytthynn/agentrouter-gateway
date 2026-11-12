@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, Column, UniqueConstraint
+from sqlalchemy import JSON, Column, ForeignKey, Integer, String, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -119,7 +119,10 @@ class ModelCatalog(SQLModel, table=True):
 
     model_id: str = Field(primary_key=True)
     enabled: bool = True
-    added_from_account_id: int | None = Field(default=None, foreign_key="accounts.id")
+    added_from_account_id: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True),
+    )
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -129,7 +132,11 @@ class AccountModel(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     account_id: int = Field(foreign_key="accounts.id", index=True, ondelete="CASCADE")
-    model_id: str = Field(foreign_key="models.model_id", index=True)
+    model_id: str = Field(
+        sa_column=Column(
+            String, ForeignKey("models.model_id", ondelete="CASCADE"), index=True, nullable=False
+        )
+    )
     available: bool = True
     checked_at: datetime = Field(default_factory=utcnow)
 
@@ -165,8 +172,18 @@ class RequestLog(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     ts: datetime = Field(default_factory=utcnow, index=True)
 
-    gateway_key_id: int | None = Field(default=None, foreign_key="gateway_keys.id", index=True)
-    account_id: int | None = Field(default=None, foreign_key="accounts.id", index=True)
+    gateway_key_id: int | None = Field(
+        default=None,
+        sa_column=Column(
+            Integer, ForeignKey("gateway_keys.id", ondelete="SET NULL"), index=True, nullable=True
+        ),
+    )  # лог переживает удаление ключа
+    account_id: int | None = Field(
+        default=None,
+        sa_column=Column(
+            Integer, ForeignKey("accounts.id", ondelete="SET NULL"), index=True, nullable=True
+        ),
+    )
 
     model: str = Field(index=True)
     stream: bool = False
@@ -200,7 +217,12 @@ class SystemLog(SQLModel, table=True):
 
     level: SystemLogLevel = Field(default=SystemLogLevel.info, index=True)
     category: SystemLogCategory = Field(default=SystemLogCategory.gateway, index=True)
-    account_id: int | None = Field(default=None, foreign_key="accounts.id", index=True)
+    account_id: int | None = Field(
+        default=None,
+        sa_column=Column(
+            Integer, ForeignKey("accounts.id", ondelete="SET NULL"), index=True, nullable=True
+        ),
+    )
 
     message: str
     details: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))

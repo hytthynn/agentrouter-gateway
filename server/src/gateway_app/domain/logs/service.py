@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from sqlalchemy import func
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import or_, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.core.masking import mask_text, truncate
 from gateway_app.db import orm
@@ -58,11 +58,11 @@ async def query_system_logs(
     if account_id:
         stmt = stmt.where(orm.SystemLog.account_id == account_id)
     if search:
-        stmt = stmt.where(orm.SystemLog.message.contains(search))
+        stmt = stmt.where(orm.SystemLog.message.contains(search))  # type: ignore[attr-defined]
     total = (await session.exec(select(func.count()).select_from(stmt.subquery()))).one()
     rows = (
         await session.exec(
-            stmt.order_by(orm.SystemLog.ts.desc(), orm.SystemLog.id.desc())  # type: ignore[attr-defined]
+            stmt.order_by(orm.SystemLog.ts.desc(), orm.SystemLog.id.desc())  # type: ignore[attr-defined,union-attr]
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -108,19 +108,19 @@ async def query_request_logs(
     if account_id:
         stmt = stmt.where(orm.RequestLog.account_id == account_id)
     if model:
-        stmt = stmt.where(orm.RequestLog.model.contains(model))
+        stmt = stmt.where(orm.RequestLog.model.contains(model))  # type: ignore[attr-defined]
     if since:
         stmt = stmt.where(orm.RequestLog.ts >= since)
     if until:
         stmt = stmt.where(orm.RequestLog.ts <= until)
     if search:
         stmt = stmt.where(
-            or_(orm.RequestLog.error_message.contains(search), orm.RequestLog.model.contains(search))
+            or_(orm.RequestLog.error_message.contains(search), orm.RequestLog.model.contains(search))  # type: ignore[attr-defined,union-attr]
         )
     total = (await session.exec(select(func.count()).select_from(stmt.subquery()))).one()
     rows = (
         await session.exec(
-            stmt.order_by(orm.RequestLog.ts.desc(), orm.RequestLog.id.desc())  # type: ignore[attr-defined]
+            stmt.order_by(orm.RequestLog.ts.desc(), orm.RequestLog.id.desc())  # type: ignore[attr-defined,union-attr]
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -172,7 +172,7 @@ async def cleanup_old_logs(session: AsyncSession, *, request_days: int) -> dict[
     ).all()
     for row in r:
         await session.delete(row)
-    for row in s:
+    for row in s:  # type: ignore[assignment]
         await session.delete(row)
     await session.commit()
     return {"request_logs": len(r), "system_logs": len(s)}

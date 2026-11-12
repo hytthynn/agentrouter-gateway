@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     database.init_db(cfg.db_url_async)
     await ensure_migrated(cfg)
 
-    from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F401
+    from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: F401
 
     async with database.make_session() as session:
         await db_seed.seed(session)

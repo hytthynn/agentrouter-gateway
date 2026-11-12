@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.core.logging import get_logger
 from gateway_app.core.security import SecretBox
@@ -46,7 +46,8 @@ async def sync_account_models(
             orm.AccountModel(account_id=account.id, model_id=mid, available=True, checked_at=now)  # type: ignore[arg-type]
         )
     await session.commit()
-    return len(await session.exec(select(orm.ModelCatalog)).all())  # type: ignore[attr-defined]
+    rows = (await session.exec(select(orm.ModelCatalog))).all()  # type: ignore[attr-defined]
+    return len(rows)
 
 
 async def sync_catalog(session: AsyncSession, adapter: ProviderAdapter, box: SecretBox) -> dict[str, int]:

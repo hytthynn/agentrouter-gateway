@@ -4,8 +4,8 @@ import asyncio
 import random
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.automation.tasks import AutomationTask
 from gateway_app.core.errors import ProviderAuthError, ProviderError
@@ -161,7 +161,7 @@ async def run_checkin(
 async def run_checkin_by_id(
     session: AsyncSession, adapter: ProviderAdapter, box: SecretBox, account_id: int, *, relogin_after: bool
 ) -> dict[str, Any]:
-    account = get_account(session, account_id)
+    account = await get_account(session, account_id)
     return await run_checkin(session, adapter, box, account, relogin_after=relogin_after)
 
 

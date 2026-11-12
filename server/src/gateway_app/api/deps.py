@@ -3,7 +3,7 @@
 from typing import Annotated, Any
 
 from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.core.security import SecretBox, get_secret_box
 from gateway_app.db.database import get_session

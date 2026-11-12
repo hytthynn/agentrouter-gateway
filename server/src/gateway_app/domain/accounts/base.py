@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.core.errors import NotFoundError
 from gateway_app.core.security import SecretBox
@@ -11,8 +11,8 @@ from gateway_app.db import orm
 from gateway_app.providers.base import ProviderCredentials
 
 
-def get_account(session: AsyncSession, account_id: int) -> orm.Account:
-    row = session.get(orm.Account, account_id)  # type: ignore[attr-defined]
+async def get_account(session: AsyncSession, account_id: int) -> orm.Account:
+    row = await session.get(orm.Account, account_id)
     if row is None:
         raise NotFoundError(f"Аккаунт {account_id} не найден")
     return row

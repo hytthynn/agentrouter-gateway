@@ -1,6 +1,6 @@
 """Первичная инициализация: сид настроек и client-профилей (§10.2)."""
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.core.logging import get_logger
 from gateway_app.db import orm
