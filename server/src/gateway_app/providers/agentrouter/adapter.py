@@ -86,8 +86,9 @@ class AgentRouterAdapter:
         profile_ua: str | None = None,
         profile_headers: dict[str, str] | None = None,
         timeout_s: int = 600,
+        path: str = "/v1/chat/completions",
     ) -> UpstreamResponse:
-        url = creds.base_url.rstrip("/") + "/v1/chat/completions"
+        url = creds.base_url.rstrip("/") + path
         headers = self._upstream_headers(api_key, profile_ua=profile_ua, profile_headers=profile_headers)
         status, body, text = await transport.request_json(
             "POST", url, headers=headers, json_body=payload, timeout_s=timeout_s, retries=0
@@ -107,8 +108,9 @@ class AgentRouterAdapter:
         profile_ua: str | None = None,
         profile_headers: dict[str, str] | None = None,
         timeout_s: int = 600,
+        path: str = "/v1/chat/completions",
     ) -> "AdapterStreamContext":
-        url = creds.base_url.rstrip("/") + "/v1/chat/completions"
+        url = creds.base_url.rstrip("/") + path
         headers = self._upstream_headers(api_key, profile_ua=profile_ua, profile_headers=profile_headers)
         return AdapterStreamContext(url=url, headers=headers, payload=payload, timeout_s=timeout_s)
 

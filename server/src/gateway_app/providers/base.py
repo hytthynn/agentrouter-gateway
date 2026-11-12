@@ -141,6 +141,7 @@ class ProviderAdapter(Protocol):
         profile_headers: dict[str, str] | None = None,
         profile_ua: str | None = None,
         timeout_s: int = 600,
+        path: str = "/v1/chat/completions",
     ) -> UpstreamResponse: ...
 
     def chat_stream(
@@ -153,6 +154,7 @@ class ProviderAdapter(Protocol):
         profile_headers: dict[str, str] | None = None,
         profile_ua: str | None = None,
         timeout_s: int = 600,
+        path: str = "/v1/chat/completions",
     ) -> Any:
         """Асинхронный контекст-менеджер → UpstreamStream."""
         ...

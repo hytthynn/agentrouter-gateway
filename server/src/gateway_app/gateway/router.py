@@ -2,11 +2,13 @@
 
 Ключ шлюза → проверка лимитов → пул аккаунтов → failover (до max_attempts) → upstream
 через client-профили → SSE-прокси → accounting. Семафоры (аккаунт/шлюз) держатся
-на всё время ответа, включая стрим.
+на всё время ответа, включая стрим. Модели с только-Responses API переводятся
+автоматически (responses_compat).
 """
 
 import asyncio
 import contextlib
+import functools
 import json
 import time
 from collections.abc import AsyncIterator, Callable
@@ -38,8 +40,17 @@ from gateway_app.gateway.compat import (
     provider_error_response,
     quota_error,
 )
+from gateway_app.gateway.responses_compat import (
+    CHAT_PATH,
+    RESPONSES_PATH,
+    ResponsesLiveStream,
+    chat_to_responses_payload,
+    is_responses_required,
+    responses_to_chat_response,
+)
 from gateway_app.providers.agentrouter import errors as ar_errors
 from gateway_app.providers.agentrouter.profiles import resolve_profile
+from gateway_app.providers.base import UpstreamResponse
 from gateway_app.settings_store import load
 
 log = get_logger(__name__)
@@ -51,6 +62,9 @@ _gate_sem: asyncio.Semaphore | None = None
 _gate_limit: int = 0
 _account_sems: dict[int, asyncio.Semaphore] = {}
 _SEM_TIMEOUT_S = 30.0
+
+# Модели, требующие /v1/responses (детектится по ошибке апстрима, §2.6) — in-memory
+_responses_only_models: set[str] = set()
 
 
 class Deferred:
@@ -269,21 +283,21 @@ async def _with_failover(
     for idx, account in enumerate(ordered):
         if idx >= max_attempts:
             break
-        if not await _acquire_account(account.id, settings.account_concurrency):
+        if not await _acquire_account(account.id or 0, settings.account_concurrency):
             attempts.append({"account_id": account.id, "status": "skipped", "code": "concurrency"})
             continue
-        defer.add(lambda aid=account.id: _release_account(aid))
+        defer.add(functools.partial(_release_account, account.id or 0))
 
         try:
             try:
-                pk_row, api_key = await pick_active_key_for_account(session, box, account.id)
+                pk_row, api_key = await pick_active_key_for_account(session, box, account.id or 0)
             except Exception as exc:
                 attempts.append({"account_id": account.id, "status": "error", "code": str(exc)[:80]})
                 last_exc = exc
                 continue
 
             base_ua = request.headers.get("user-agent")
-            common = dict(
+            common: dict[str, Any] = dict(
                 gateway_key_id=key.id,
                 account_id=account.id,
                 model=model,
@@ -292,28 +306,59 @@ async def _with_failover(
                 client_ua=base_ua,
             )
 
+            # Responses API: модель не поддерживает chat/completions → сразу /v1/responses
+            upstream_path = RESPONSES_PATH if model in _responses_only_models else CHAT_PATH
+            upstream_payload = (
+                chat_to_responses_payload(payload) if upstream_path == RESPONSES_PATH else payload
+            )
+
             if stream:
-                stream_ctx = adapter.chat_stream(
-                    creds_of(box, account), api_key, payload,
-                    profile_ua=ua, profile_headers=extra_headers,
-                    timeout_s=settings.upstream_timeout_s,
-                )
+                live: Any
                 try:
+                    stream_ctx = adapter.chat_stream(
+                        creds_of(box, account), api_key, upstream_payload,
+                        profile_ua=ua, profile_headers=extra_headers,
+                        timeout_s=settings.upstream_timeout_s, path=upstream_path,
+                    )
                     live = await stream_ctx.__aenter__()
                 except Exception as exc:
-                    # до первого байта клиенту — failover возможен (§8.4)
-                    attempts.append(
-                        {"account_id": account.id, "status": "error", "code": getattr(exc, "code", type(exc).__name__)}
-                    )
-                    last_exc = exc
-                    if ar_errors.is_retriable(exc):
-                        continue
-                    defer.run()
-                    return provider_error_response(exc, attempts_left=ordered[idx + 1 :])
+                    # модель требует Responses API → пробуем тем же аккаунтом (§8.4)
+                    if upstream_path == CHAT_PATH and is_responses_required(exc):
+                        _responses_only_models.add(model)
+                        upstream_path = RESPONSES_PATH
+                        upstream_payload = chat_to_responses_payload(payload)
+                        try:
+                            stream_ctx = adapter.chat_stream(
+                                creds_of(box, account), api_key, upstream_payload,
+                                profile_ua=ua, profile_headers=extra_headers,
+                                timeout_s=settings.upstream_timeout_s, path=upstream_path,
+                            )
+                            live = await stream_ctx.__aenter__()
+                        except Exception as exc2:
+                            attempts.append(
+                                {"account_id": account.id, "status": "error", "code": getattr(exc2, "code", type(exc2).__name__)}
+                            )
+                            last_exc = exc2
+                            if ar_errors.is_retriable(exc2):
+                                continue
+                            defer.run()
+                            return provider_error_response(exc2, attempts_left=[{'account_id': a.id} for a in ordered[idx + 1 :]])
+                    else:
+                        # до первого байта клиенту — failover возможен (§8.4)
+                        attempts.append(
+                            {"account_id": account.id, "status": "error", "code": getattr(exc, "code", type(exc).__name__)}
+                        )
+                        last_exc = exc
+                        if ar_errors.is_retriable(exc):
+                            continue
+                        defer.run()
+                        return provider_error_response(exc, attempts_left=[{'account_id': a.id} for a in ordered[idx + 1 :]])
 
                 pk_row.last_used_at = utcnow()
                 session.add(pk_row)
                 await session.commit()
+                if upstream_path == RESPONSES_PATH:
+                    live = ResponsesLiveStream(live, model)
                 return _stream_response(
                     live, stream_ctx, payload, base=common,
                     started=started, on_finish=defer.run,
@@ -321,19 +366,52 @@ async def _with_failover(
 
             try:
                 resp = await adapter.chat_non_stream(
-                    creds_of(box, account), api_key, payload,
+                    creds_of(box, account), api_key, upstream_payload,
                     profile_ua=ua, profile_headers=extra_headers,
-                    timeout_s=settings.upstream_timeout_s,
+                    timeout_s=settings.upstream_timeout_s, path=upstream_path,
                 )
             except Exception as exc:
                 attempts.append(
                     {"account_id": account.id, "status": "error", "code": getattr(exc, "code", type(exc).__name__)}
                 )
-                last_exc = exc
-                if ar_errors.is_retriable(exc):
-                    continue
-                defer.run()
-                return provider_error_response(exc, attempts_left=ordered[idx + 1 :])
+                if upstream_path == CHAT_PATH and is_responses_required(exc):
+                    # модель требует Responses API → переводим payload и пробуем тем же аккаунтом
+                    _responses_only_models.add(model)
+                    upstream_path = RESPONSES_PATH
+                    upstream_payload = chat_to_responses_payload(payload)
+                    try:
+                        resp = await adapter.chat_non_stream(
+                            creds_of(box, account), api_key, upstream_payload,
+                            profile_ua=ua, profile_headers=extra_headers,
+                            timeout_s=settings.upstream_timeout_s, path=upstream_path,
+                        )
+                    except Exception as exc2:
+                        last_exc = exc2
+                        if ar_errors.is_retriable(exc2):
+                            continue
+                        defer.run()
+                        return provider_error_response(exc2, attempts_left=[{'account_id': a.id} for a in ordered[idx + 1 :]])
+                else:
+                    last_exc = exc
+                    if ar_errors.is_retriable(exc):
+                        continue
+                    defer.run()
+                    return provider_error_response(exc, attempts_left=[{'account_id': a.id} for a in ordered[idx + 1 :]])
+
+            # успех (не-стрим): accounting + passthrough (с трансляцией ответа при Responses API)
+            pk_row.last_used_at = utcnow()
+            session.add(pk_row)
+            await session.commit()
+            if upstream_path == RESPONSES_PATH:
+                resp = UpstreamResponse(
+                    status=resp.status, body=responses_to_chat_response(resp.body)
+                )
+            await _record_response(
+                payload, resp.status, resp.body,
+                started=started, first_token_ms=None, **common,
+            )
+            defer.run()
+            return JSONResponse(status_code=200, content=resp.body)
 
             # успех (не-стрим): accounting + passthrough
             pk_row.last_used_at = utcnow()
