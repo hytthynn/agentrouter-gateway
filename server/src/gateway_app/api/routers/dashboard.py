@@ -52,7 +52,7 @@ async def dashboard(session: SessionDep) -> dict[str, Any]:
     hour0 = since.replace(minute=0, second=0, microsecond=0)
     for i in range(25):
         h = hour0 + timedelta(hours=i)
-        buckets.append({"hour": h.isoformat() + "Z", "requests": 0, "tokens": 0})
+        buckets.append({"hour": h.isoformat(), "requests": 0, "tokens": 0})
     for ts, tokens in rows:
         idx = int((ts - hour0).total_seconds() // 3600)
         if 0 <= idx < len(buckets):

@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from gateway_app.api.deps import SessionDep, get_adapter
+from gateway_app.api.deps import BoxDep, SessionDep, get_adapter
 from gateway_app.core.security import get_secret_box
 from gateway_app.domain.keys import provider_keys as pk_service
 
@@ -45,6 +45,14 @@ async def create_key(body: ProviderKeyCreateIn, session: SessionDep) -> dict[str
         model_limits=body.model_limits,
     )
     return {"success": True, "data": pk_service.provider_key_out(row)}
+
+
+@router.get("/{key_id}/reveal")
+async def reveal_key(key_id: int, session: SessionDep, box: BoxDep) -> dict[str, Any]:
+    """FR-2.1/2.3: показать полный sk-... по кнопке."""
+    row = await pk_service.get_provider_key(session, key_id)
+    full = await pk_service.decrypt_key(box, row)
+    return {"success": True, "data": {"key": full}}
 
 
 @router.patch("/{key_id}")
