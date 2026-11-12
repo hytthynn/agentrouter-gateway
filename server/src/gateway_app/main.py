@@ -112,7 +112,7 @@ def create_app() -> FastAPI:
     app.include_router(gateway_router)
 
     @app.get("/api/version")
-    async def version() -> dict[str, str]:
+    async def version() -> dict[str, Any]:
         return {"success": True, "data": {"version": __version__}}
 
     # Обработка доменных ошибок: {"success": false, "error": {...}}
