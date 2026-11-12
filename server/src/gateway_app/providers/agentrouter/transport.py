@@ -59,7 +59,7 @@ async def request_json(
     for attempt in range(retries + 1):
         try:
             resp = await session.request(
-                method,
+                method,  # type: ignore[arg-type]
                 url,
                 headers=headers,
                 json=json_body,

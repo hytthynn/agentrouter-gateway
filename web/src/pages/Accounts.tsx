@@ -39,8 +39,9 @@ export default function AccountsPage() {
       if (vars.action === "checkin") {
         if (data.status === "already") toast("Чек-ин уже выполнен сегодня", "info");
         else if (data.status === "success") toast("Чек-ин успешен — баланс обновлён", "success");
+        else if (data.status === "unavailable") toast(data.message ?? "Чек-ин недоступен у провайдера", "info");
         else if (data.status === "auth_error") toast("Токен отклонён — аккаунт помечен «нужен перелогин»", "error");
-        else toast(`Чек-ин: ${data.status}`, "error");
+        else toast(`Чек-ин: ${data.status ?? "неизвестный статус"}`, "error");
       } else {
         toast("Готово", "success");
       }

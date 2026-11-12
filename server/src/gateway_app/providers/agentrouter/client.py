@@ -94,8 +94,12 @@ async def get_user_self(creds: ProviderCredentials) -> UserSelf:
 
 
 async def list_models(creds: ProviderCredentials) -> list[str]:
-    """GET /api/models с фолбэком /api/user/models (§2.2)."""
-    for path in ("/api/models", "/api/user/models"):
+    """Модели, доступные аккаунту: /api/user/models, фолбэк /api/models (§2.2).
+
+    Форматы форка (runtime-discovery §2.6): список строк ИЛИ словарь «группа → список»
+    (агрегируем union всех групп).
+    """
+    for path in ("/api/user/models", "/api/models"):
         try:
             body = await _call(creds, "GET", path)
         except NotFoundError:
@@ -104,11 +108,27 @@ async def list_models(creds: ProviderCredentials) -> list[str]:
             log.debug("list_models %s не удался: %s", path, exc)
             continue
         data = _extract_data(body)
-        if isinstance(data, dict):
-            data = data.get("models") or data.get("data") or []
+        models: list[str] = []
         if isinstance(data, list):
-            return [str(m) for m in data]
-    raise ProviderError("Не удалось получить список моделей (/api/models и фолбэк)")
+            models = [str(m) for m in data]
+        elif isinstance(data, dict):
+            # {"1": ["gpt-4o", ...], "2": [...]} → union всех групп
+            seen: set[str] = set()
+            for value in data.values():
+                if isinstance(value, list):
+                    for m in value:
+                        s = str(m)
+                        if s not in seen:
+                            seen.add(s)
+                            models.append(s)
+            # варианты {"models": [...]} / {"data": [...]}
+            if not models:
+                inner = data.get("models") or data.get("data")
+                if isinstance(inner, list):
+                    models = [str(m) for m in inner]
+        if models:
+            return models
+    raise ProviderError("Не удалось получить список моделей (/api/user/models и фолбэк)")
 
 
 def _as_int(v: Any) -> int | None:
@@ -140,7 +160,7 @@ def _token_from(data: dict[str, Any]) -> ProviderTokenInfo:
         unlimited_quota=bool(data.get("unlimited_quota", True)),
         remain_quota=_as_int(data.get("remain_quota")),
         used_quota=_as_int(data.get("used_quota")),
-        expired_time=_as_int(data.get("expired_time")) if data.get("expired_time") is not None else -1,
+        expired_time=_as_int(data.get("expired_time")) if data.get("expired_time") is not None else -1,  # type: ignore[arg-type]
         model_limits_enabled=bool(data.get("model_limits_enabled", False)),
         model_limits=limits,
     )
@@ -170,6 +190,11 @@ async def list_tokens(creds: ProviderCredentials, page_size: int = 100) -> list[
 
 
 async def create_token(creds: ProviderCredentials, spec: CreateTokenSpec) -> ProviderTokenInfo:
+    """POST /api/token/ + фолбэк: полный key из списка, если провайдер его не вернул (§2.6).
+
+    Форк AgentRouter отвечает {"success": true} без data — ключ добираем из GET /api/token/
+    по имени (самый свежий созданный).
+    """
     body = await _call(
         creds,
         "POST",
@@ -184,10 +209,18 @@ async def create_token(creds: ProviderCredentials, spec: CreateTokenSpec) -> Pro
             "group": spec.group,
         },
     )
-    data = _extract_data(body) or {}
-    info = _token_from(data) if isinstance(data, dict) else ProviderTokenInfo(provider_token_id=None)
-    if not info.key_full:
-        raise ProviderError("Создание ключа: провайдер не вернул полный key")
+    data = _extract_data(body)
+    info = _token_from(data) if isinstance(data, dict) and data.get("key") else None
+
+    if info is None or not info.key_full:
+        # фолбэк: ищем созданный ключ в списке по имени (самый свежий)
+        remote = await list_tokens(creds)
+        candidates = [t for t in remote if (t.name or "") == spec.name]
+        info = candidates[0] if candidates else None
+        if info is None or not info.key_full:
+            raise ProviderError(
+                f"Создание ключа: провайдер не вернул key и ключ {spec.name!r} не найден в списке"
+            )
     return info
 
 
@@ -239,11 +272,16 @@ def _looks_already_done(message: str) -> bool:
 
 
 async def checkin(creds: ProviderCredentials, cached_path: str | None = None) -> CheckinOutcome:
-    """POST чек-ин: перебор кандидатов (§2.6), «уже чекинились» — не ошибка (§2.3)."""
+    """POST чек-ин: перебор кандидатов (§2.6), «уже чекинились» — не ошибка (§2.3).
+
+    Если ни один кандидат не реализован у провайдера (404 «Invalid URL» от AI-роутера) —
+    возвращаем outcome с unavailable=True: это состояние провайдера, а не сбой приложения.
+    """
     candidates = ([cached_path] if cached_path else []) + [
         p for p in CHECKIN_CANDIDATES if p != cached_path
     ]
     last_msg = ""
+    all_not_found = True
     for path in candidates:
         url = creds.base_url.rstrip("/") + path
         status, body, text = await transport.request_json(
@@ -254,6 +292,7 @@ async def checkin(creds: ProviderCredentials, cached_path: str | None = None) ->
         if status == 404:
             last_msg = f"{path}: 404"
             continue
+        all_not_found = False
         if status == 401:
             raise ProviderAuthError("Чек-ин: токен отклонён (401)")
         if body is None:
@@ -269,7 +308,32 @@ async def checkin(creds: ProviderCredentials, cached_path: str | None = None) ->
             )
         last_msg = f"{path}: {message or text[:200]}"
         # success=false без маркера «уже» — пробуем следующий кандидат
+
+    if all_not_found:
+        # Фича чек-ина не активна у провайдера: уточним через GET-пробу
+        detail = await _checkin_unavailable_detail(creds)
+        return CheckinOutcome(False, False, detail, unavailable=True, raw={})
     raise ProviderError(f"Чек-ин не удался: {last_msg or 'все кандидаты исчерпаны'}")
+
+
+async def _checkin_unavailable_detail(creds: ProviderCredentials) -> str:
+    """Пояснение, почему чек-ин недоступен (права аккаунта / фича отключена)."""
+    url = creds.base_url.rstrip("/") + "/api/user/checkin"
+    try:
+        status, body, _text = await transport.request_json(
+            "GET", url, headers=_headers(creds), timeout_s=15.0
+        )
+    except Exception:
+        return "Чек-ин недоступен у провайдера (эндпоинт не реализован)"
+    message = mask_text(str((body or {}).get("message") or "")) if body else ""
+    if status == 200 and body and body.get("success") is False:
+        if "权限" in message or "прав" in message.lower():
+            return (
+                f"Чек-ин недоступен для этого аккаунта: провайдер ответил «{message}» "
+                "(фича не активна для группы/роли)"
+            )
+        return f"Чек-ин недоступен у провайдера: «{message}»"
+    return "Чек-ин недоступен у провайдера (эндпоинт не реализован)"
 
 
 async def platform_status(base_url: str) -> PlatformStatus:
@@ -282,9 +346,9 @@ async def platform_status(base_url: str) -> PlatformStatus:
         raise ProviderError(f"/api/status: HTTP {status}")
     data = body.get("data") if isinstance(body.get("data"), dict) else body
     return PlatformStatus(
-        version=data.get("version"),
-        system_name=data.get("system_name"),
-        quota_per_unit=_as_int(data.get("quota_per_unit")),
-        turnstile_check=bool(data.get("turnstile_check", False)),
-        raw=data,
+        version=data.get("version"),  # type: ignore[union-attr]
+        system_name=data.get("system_name"),  # type: ignore[union-attr]
+        quota_per_unit=_as_int(data.get("quota_per_unit")),  # type: ignore[union-attr]
+        turnstile_check=bool(data.get("turnstile_check", False)),  # type: ignore[union-attr]
+        raw=data,  # type: ignore[arg-type]
     )

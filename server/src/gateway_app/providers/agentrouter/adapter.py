@@ -165,7 +165,7 @@ class _LiveStream(UpstreamStream):
         self.last_usage: dict[str, Any] | None = None
         self.completion_chars = 0
 
-    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:  # type: ignore[override]
         async for chunk in self._wrapper.aiter_bytes():
             self._track_usage(chunk)
             yield chunk

@@ -87,6 +87,13 @@ async def run_checkin(
     if outcome.path and outcome.path != cached_path:
         await _cache_checkin_path(session, outcome.path)  # §2.6 п.3 — кэш найденного эндпоинта
 
+    if outcome.unavailable:
+        await log_system(
+            session, "info", "checkin", f"{account.name}: {outcome.message}",
+            account_id=account.id,
+        )
+        return {"status": "unavailable", "message": outcome.message}
+
     if outcome.already_done:
         await log_system(
             session, "info", "checkin", f"{account.name}: чек-ин уже выполнен сегодня",

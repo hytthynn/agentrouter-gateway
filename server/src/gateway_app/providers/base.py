@@ -62,6 +62,7 @@ class CheckinOutcome:
     already_done: bool = False
     message: str = ""
     path: str | None = None  # сработавший эндпоинт — кэшируется в настройках (§2.6)
+    unavailable: bool = False  # фича чек-ина не активна у провайдера (не сбой)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
