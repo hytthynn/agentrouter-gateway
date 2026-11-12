@@ -1,6 +1,7 @@
 """Шифрование секретов: AES-256-GCM, формат `v1:<nonce_b64>:<ciphertext_b64>`, AAD = имя поля."""
 
 import base64
+import contextlib
 import hashlib
 import os
 import secrets
@@ -68,10 +69,8 @@ def load_or_create_master_key(key_file: Path, env_key: str | None) -> bytes:
     key = os.urandom(32)
     key_file.parent.mkdir(parents=True, exist_ok=True)
     key_file.write_bytes(key)
-    try:
-        key_file.chmod(0o600)
-    except OSError:
-        pass  # Windows: права ограничены ACL файловой системы
+    with contextlib.suppress(OSError):
+        key_file.chmod(0o600)  # Windows: права ограничены ACL файловой системы
     return key
 
 
@@ -124,3 +123,18 @@ def mask_secret(value: str, keep_start: int = 3, keep_end: int = 4) -> str:
     if len(value) <= keep_start + keep_end + 2:
         return value[:keep_start] + "…" + value[-keep_end:]
     return f"{value[:keep_start]}…{value[-keep_end:]}"
+
+
+_box: "SecretBox | None" = None
+
+
+def get_secret_box() -> "SecretBox":
+    """Синглтон SecretBox: мастер-ключ из env или data/.master_key."""
+    global _box
+    if _box is None:
+        from gateway_app.core.config import get_config
+
+        cfg = get_config()
+        key = load_or_create_master_key(cfg.master_key_file, cfg.master_key)
+        _box = SecretBox(key)
+    return _box

@@ -4,6 +4,7 @@
 (в этом случае функции автоматизации возвращают понятную ошибку).
 """
 
+import contextlib
 from typing import Any
 
 from gateway_app.core.errors import AutomationError
@@ -52,12 +53,8 @@ async def launch_context(storage_state: dict | None = None):
 
 async def close_context(context: Any) -> None:
     browser = getattr(context, "_agw_browser", None)
-    try:
+    with contextlib.suppress(Exception):
         await context.close()
-    except Exception:  # noqa: BLE001
-        pass
     if browser is not None:
-        try:
+        with contextlib.suppress(Exception):
             await browser.close()
-        except Exception:  # noqa: BLE001
-            pass

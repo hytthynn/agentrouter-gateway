@@ -1,7 +1,7 @@
 """initial schema
 
 Revision ID: d149f4876b02
-Revises: 
+Revises:
 Create Date: 2026-11-12 21:36:05.753794
 """
 from collections.abc import Sequence

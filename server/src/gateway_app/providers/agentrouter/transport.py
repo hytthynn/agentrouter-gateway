@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import contextlib
 import random
 from collections.abc import AsyncIterator
 from typing import Any
@@ -71,7 +72,7 @@ async def request_json(
                 try:
                     parsed = resp.json()
                     body = parsed if isinstance(parsed, dict) else None
-                except Exception:  # noqa: BLE001 — тело не JSON
+                except Exception:
                     body = None
             return resp.status_code, body, text
         except Exception as exc:  # curl_cffi: Errors / Timeout — сетевой уровень
@@ -127,7 +128,7 @@ class StreamWrapper:
     def headers(self) -> dict[str, str]:
         try:
             return {str(k): str(v) for k, v in self._resp.headers.items()}
-        except Exception:  # noqa: BLE001
+        except Exception:
             return {}
 
     @property
@@ -142,14 +143,12 @@ class StreamWrapper:
     async def text(self) -> str:
         try:
             return self._resp.text or ""
-        except Exception:  # noqa: BLE001
+        except Exception:
             return ""
 
     async def aclose(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             await self._resp.aclose()
-        except Exception:  # noqa: BLE001
-            pass
 
 
 async def open_stream(
@@ -161,10 +160,10 @@ async def open_stream(
 
 
 __all__ = [
-    "get_session",
-    "close_session",
-    "request_json",
-    "open_stream",
     "StreamWrapper",
+    "close_session",
+    "get_session",
     "looks_like_waf",
+    "open_stream",
+    "request_json",
 ]

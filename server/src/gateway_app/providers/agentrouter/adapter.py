@@ -1,7 +1,8 @@
 """Адаптер AgentRouter: реализация протокола ProviderAdapter (§2.6 — единственная сетевая точка)."""
 
 import json
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from gateway_app.core.logging import get_logger
 from gateway_app.providers.agentrouter import client, errors, transport
@@ -137,7 +138,7 @@ class AdapterStreamContext:
                 chunks.append(chunk)
                 if sum(len(c) for c in chunks) > 65536:
                     break
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         await wrapper.aclose()
         text = b"".join(chunks).decode("utf-8", errors="replace")
@@ -173,7 +174,7 @@ class _LiveStream(UpstreamStream):
         """Выделить usage из SSE-чанков и посчитать символы completion (§8.3)."""
         try:
             text = chunk.decode("utf-8", errors="ignore")
-        except Exception:  # noqa: BLE001
+        except Exception:
             return
         for line in text.splitlines():
             line = line.strip()
@@ -200,7 +201,7 @@ def quota_to_usd(quota: int | None) -> float | None:
 
 
 __all__ = [
-    "AgentRouterAdapter",
     "AdapterStreamContext",
+    "AgentRouterAdapter",
     "quota_to_usd",
 ]

@@ -1,7 +1,8 @@
 """Порт провайдера (чистая архитектура): домен зависит только от этого протокола."""
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass
@@ -60,6 +61,7 @@ class CheckinOutcome:
     success: bool
     already_done: bool = False
     message: str = ""
+    path: str | None = None  # сработавший эндпоинт — кэшируется в настройках (§2.6)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 

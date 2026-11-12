@@ -1,7 +1,8 @@
 """Runtime-настройки: таблица `settings` (key-value), перекрывает дефолты. Hot-reload через подписки."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -57,7 +58,7 @@ def _notify(changed: dict[str, str]) -> None:
     for cb in _subscribers:
         try:
             cb(changed)
-        except Exception:  # noqa: BLE001 — подписчик не должен ломать сохранение
+        except Exception:
             log.exception("Ошибка в подписчике настроек")
 
 
@@ -69,7 +70,7 @@ def validate(key: str, value: str) -> str:
             iv = int(value)
         except ValueError as exc:
             raise ValueError(f"{key}: ожидается целое число") from exc
-        if iv <= 0 and key != "log_retention_days" or (key == "log_retention_days" and iv < 1):
+        if (iv <= 0 and key != "log_retention_days") or (key == "log_retention_days" and iv < 1):
             raise ValueError(f"{key}: должно быть положительным")
         return str(iv)
     if key in _BOOL_KEYS:

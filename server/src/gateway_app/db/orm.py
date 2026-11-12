@@ -1,7 +1,7 @@
-"""ORM-модели (SQLModel) — схема §5.1 ТЗ. Все datetime — naive UTC."""
+"""ORM-модели (SQLModel) — схема §5.1 ТЗ. Все datetime — aware UTC."""
 
-from datetime import datetime
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import JSON, Column, UniqueConstraint
@@ -9,42 +9,41 @@ from sqlmodel import Field, SQLModel
 
 
 def utcnow() -> datetime:
-    """Текущее время в UTC (naive — SQLite хранит без таймзоны)."""
-    from datetime import timezone
+    """Текущее время в UTC (aware)."""
 
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC)
 
 
-class AccountStatus(str, Enum):
+class AccountStatus(StrEnum):
     active = "active"
     needs_relogin = "needs_relogin"
     error = "error"
     disabled = "disabled"
 
 
-class KeyStatus(str, Enum):
+class KeyStatus(StrEnum):
     active = "active"
     disabled = "disabled"
 
 
-class KeyOrigin(str, Enum):
+class KeyOrigin(StrEnum):
     auto = "auto"
     manual = "manual"
 
 
-class RequestStatus(str, Enum):
+class RequestStatus(StrEnum):
     success = "success"
     error = "error"
     client_abort = "client_abort"
 
 
-class SystemLogLevel(str, Enum):
+class SystemLogLevel(StrEnum):
     info = "info"
     warn = "warn"
     error = "error"
 
 
-class SystemLogCategory(str, Enum):
+class SystemLogCategory(StrEnum):
     oauth = "oauth"
     checkin = "checkin"
     balance = "balance"

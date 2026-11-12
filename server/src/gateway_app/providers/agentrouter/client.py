@@ -259,9 +259,11 @@ async def checkin(creds: ProviderCredentials, cached_path: str | None = None) ->
         success = bool(body.get("success"))
         message = mask_text(str(body.get("message") or ""))
         if success:
-            return CheckinOutcome(True, False, message, body)
+            return CheckinOutcome(True, False, message, path=path, raw=body)
         if _looks_already_done(message):
-            return CheckinOutcome(False, True, message or "уже чекинились сегодня", body)
+            return CheckinOutcome(
+                False, True, message or "уже чекинились сегодня", path=path, raw=body
+            )
         last_msg = f"{path}: {message or text[:200]}"
         # success=false без маркера «уже» — пробуем следующий кандидат
     raise ProviderError(f"Чек-ин не удался: {last_msg or 'все кандидаты исчерпаны'}")
@@ -270,7 +272,7 @@ async def checkin(creds: ProviderCredentials, cached_path: str | None = None) ->
 async def platform_status(base_url: str) -> PlatformStatus:
     """Публичный GET /api/status — достижимость + версия платформы."""
     url = base_url.rstrip("/") + "/api/status"
-    status, body, text = await transport.request_json(
+    status, body, _text = await transport.request_json(
         "GET", url, headers={"User-Agent": _BROWSER_UA, "Accept": "application/json"}, timeout_s=15.0
     )
     if status >= 400 or body is None:

@@ -1,5 +1,6 @@
 """Классификация ошибок апстрима AgentRouter (§2.5)."""
 
+from datetime import UTC
 from typing import Any
 
 from gateway_app.core.errors import (
@@ -22,9 +23,9 @@ REFILL_HOURS_UTC = (2, 11)  # пополнения пулов 02:00 и 11:00 UTC
 
 def next_refill_iso_utc() -> str:
     """Ближайшее время пополнения пула (02:00/11:00 UTC) — ISO-строка."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     candidates = []
     for day_offset in (0, 1):
         for hour in REFILL_HOURS_UTC:
@@ -71,10 +72,13 @@ def classify_upstream_error(
 
 def is_retriable(exc: Exception) -> bool:
     """Failover-набор кодов (FR-6.4): 401/402/403/429/500/502/503 + WAF."""
-    if isinstance(exc, (BudgetPoolExhaustedError, NoAvailableChannelError, RateLimitedError)):
-        return True
-    if isinstance(exc, WafBlockedError):
-        return True
-    if isinstance(exc, ProviderAuthError):
-        return True  # 401 → другой аккаунт
-    return False
+    return isinstance(
+        exc,
+        (
+            BudgetPoolExhaustedError,
+            NoAvailableChannelError,
+            RateLimitedError,
+            WafBlockedError,
+            ProviderAuthError,  # 401 → другой аккаунт
+        ),
+    )

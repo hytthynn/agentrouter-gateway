@@ -138,7 +138,7 @@ async def _save_screenshot(page: Any, screenshots_dir: Path) -> None:
         path = screenshots_dir / "last_error.png"
         await page.screenshot(path=str(path), full_page=False)
         log.info("Скриншот последнего состояния: %s", path)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -160,7 +160,7 @@ async def _start_github_oauth(ctx: FlowContext, page: Any, base_url: str) -> str
             async with page.expect_navigation(wait_until="domcontentloaded"):
                 await el.click()
             return page.url
-        except Exception:  # noqa: BLE001 — пробуем следующий селектор
+        except Exception:
             continue
 
     ctx.log("Кнопка GitHub не найдена — fallback: прямой OAuth-URL через /api/oauth/state")
@@ -258,7 +258,7 @@ async def _maybe_authorize(ctx: FlowContext, page: Any) -> None:
         async with page.expect_navigation(wait_until="domcontentloaded"):
             await btn.click()
         ctx.log("✓ Кнопка Authorize нажата")
-    except Exception:  # noqa: BLE001 — страницы authorize может не быть
+    except Exception:
         pass
 
 
@@ -290,7 +290,7 @@ async def _wait_provider_session(ctx: FlowContext, page: Any, context: Any, base
 async def _page_has(page: Any, selector: str) -> bool:
     try:
         return await page.locator(selector).first.is_visible(timeout=1500)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -304,5 +304,5 @@ async def _detect_rejection(page: Any) -> None:
                 raise AutomationError(f"GitHub отклонил вход: {text[:200]}")
     except AutomationError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass

@@ -3,7 +3,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway_app.core.logging import get_logger
-from gateway_app.db import orm, settings_store
+from gateway_app.db import orm
 
 log = get_logger(__name__)
 

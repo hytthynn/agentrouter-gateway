@@ -3,10 +3,11 @@
 import asyncio
 import uuid
 from collections import deque
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
-from typing import Any, AsyncIterator
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 from gateway_app.core.errors import AutomationError
 from gateway_app.core.logging import get_logger
@@ -14,7 +15,7 @@ from gateway_app.core.logging import get_logger
 log = get_logger(__name__)
 
 
-class TaskState(str, Enum):
+class TaskState(StrEnum):
     running = "running"
     waiting_user_code = "waiting_user_code"  # §9.5 — device verification
     success = "success"
@@ -38,7 +39,7 @@ class AutomationTask:
     logs: deque[str] = field(default_factory=lambda: deque(maxlen=400))
     error: str | None = None
     result: dict[str, Any] | None = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     _code_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     _user_code: str | None = field(default=None, repr=False)
     _subscribers: set[asyncio.Queue] = field(default_factory=set, repr=False)
@@ -152,7 +153,7 @@ class TaskManager:
                 task.finish_success(result or {})
             except AutomationError as exc:
                 task.finish_error(str(exc))
-            except Exception as exc:  # noqa: BLE001 — любая ошибка → состояние error
+            except Exception as exc:
                 log.exception("Задача %s упала", task.id)
                 task.finish_error(f"{type(exc).__name__}: {exc}")
 
@@ -175,7 +176,7 @@ class TaskManager:
 
     def cleanup(self, max_age_s: int = 3600) -> int:
         """Удалить старые завершённые задачи (утечка памяти при долгом аптайме)."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         to_del = [
             tid
             for tid, t in self._tasks.items()
