@@ -159,13 +159,17 @@ class AdapterStreamContext:
 
 
 class _LiveStream(UpstreamStream):
-    """Живой SSE-поток апстрима с разбором usage из финального чанка."""
+    """Живой SSE-поток апстрима с разбором usage из финального чанка.
+
+    События приходят разрезанными между пакетами — буферизуем неполную строку.
+    """
 
     def __init__(self, wrapper: transport.StreamWrapper) -> None:
         super().__init__(status=wrapper.status, headers=wrapper.headers, _close=wrapper.aclose)
         self._wrapper = wrapper
         self.last_usage: dict[str, Any] | None = None
         self.completion_chars = 0
+        self._line_buffer = ""
 
     async def aiter_bytes(self) -> AsyncIterator[bytes]:  # type: ignore[override]
         async for chunk in self._wrapper.aiter_bytes():
@@ -175,10 +179,12 @@ class _LiveStream(UpstreamStream):
     def _track_usage(self, chunk: bytes) -> None:
         """Выделить usage из SSE-чанков и посчитать символы completion (§8.3)."""
         try:
-            text = chunk.decode("utf-8", errors="ignore")
+            self._line_buffer += chunk.decode("utf-8", errors="ignore")
         except Exception:
             return
-        for line in text.splitlines():
+        lines = self._line_buffer.split("\n")
+        self._line_buffer = lines.pop()  # неполная строка — в буфер
+        for line in lines:
             line = line.strip()
             if not line.startswith("data:"):
                 continue

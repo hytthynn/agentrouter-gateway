@@ -208,7 +208,12 @@ def responses_to_chat_response(resp: dict[str, Any]) -> dict[str, Any]:
 
 
 class ResponsesSSETranslator:
-    """SSE /v1/responses → SSE chat.completion.chunk (по событиям)."""
+    """SSE /v1/responses → SSE chat.completion.chunk (по событиям).
+
+    События могут приходить разрезанными между сетевыми пакетами — держим буфер
+    неполной строки между feed() (иначе теряется response.completed → у клиента
+    «stream ended without finish_reason»).
+    """
 
     def __init__(self, model: str) -> None:
         self.model = model
@@ -216,6 +221,8 @@ class ResponsesSSETranslator:
         self.completion_chars = 0
         self._tools: dict[int, dict[str, Any]] = {}
         self._id = f"chatcmpl-resp-{int(time.time())}"
+        self._buffer = ""
+        self._role_sent = False
 
     def _chunk(self, choices_delta: dict[str, Any], usage: dict[str, Any] | None = None) -> bytes:
         obj: dict[str, Any] = {
@@ -229,64 +236,83 @@ class ResponsesSSETranslator:
             obj["usage"] = usage
         return b"data: " + json.dumps(obj, ensure_ascii=False).encode() + b"\n\n"
 
-    def feed(self, chunk: bytes) -> bytes:
-        out: list[bytes] = []
+    def _process_line(self, line: str) -> list[bytes]:
+        if not line.startswith("data:"):
+            return []
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            return []
         try:
-            text = chunk.decode("utf-8", errors="ignore")
+            ev = json.loads(data)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(ev, dict):
+            return []
+        out: list[bytes] = []
+        etype = ev.get("type")
+
+        if etype == "response.output_text.delta":
+            delta = ev.get("delta") or ""
+            self.completion_chars += len(delta)
+            delta_obj: dict[str, Any] = {"content": delta}
+            if not self._role_sent:
+                delta_obj = {"role": "assistant", "content": delta}
+                self._role_sent = True
+            out.append(self._chunk({"delta": delta_obj, "finish_reason": None}))
+        elif etype == "response.output_item.added":
+            item = ev.get("item") or {}
+            if item.get("type") == "function_call":
+                idx = int(ev.get("output_index") or len(self._tools))
+                self._tools[idx] = {
+                    "id": item.get("call_id") or item.get("id") or f"call_{idx}",
+                    "name": item.get("name"),
+                }
+        elif etype == "response.function_call_arguments.delta":
+            idx = int(ev.get("output_index") or 0)
+            info = self._tools.setdefault(idx, {"id": f"call_{idx}", "name": None})
+            tc: dict[str, Any] = {
+                "index": idx,
+                "id": info["id"],
+                "type": "function",
+                "function": {"arguments": ev.get("delta") or ""},
+            }
+            if info.get("name"):
+                tc["function"]["name"] = info["name"]
+            out.append(self._chunk({"delta": {"tool_calls": [tc]}, "finish_reason": None}))
+        elif etype in ("response.completed", "response.incomplete"):
+            resp = ev.get("response") or {}
+            u = resp.get("usage") or {}
+            prompt = int(u.get("input_tokens") or 0)
+            completion = int(u.get("output_tokens") or 0)
+            self.last_usage = {
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
+                "total_tokens": int(u.get("total_tokens") or prompt + completion),
+            }
+            finish = "tool_calls" if self._tools else ("length" if etype == "response.incomplete" else "stop")
+            out.append(self._chunk({"delta": {}, "finish_reason": finish}, usage=self.last_usage))
+            out.append(b"data: [DONE]\n\n")
+        return out
+
+    def feed(self, chunk: bytes) -> bytes:
+        try:
+            self._buffer += chunk.decode("utf-8", errors="ignore")
         except Exception:
             return b""
-        for line in text.splitlines():
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if not data or data == "[DONE]":
-                continue
-            try:
-                ev = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(ev, dict):
-                continue
-            etype = ev.get("type")
-
-            if etype == "response.output_text.delta":
-                delta = ev.get("delta") or ""
-                self.completion_chars += len(delta)
-                out.append(self._chunk({"delta": {"content": delta}, "finish_reason": None}))
-            elif etype == "response.output_item.added":
-                item = ev.get("item") or {}
-                if item.get("type") == "function_call":
-                    idx = int(ev.get("output_index") or len(self._tools))
-                    self._tools[idx] = {
-                        "id": item.get("call_id") or item.get("id") or f"call_{idx}",
-                        "name": item.get("name"),
-                    }
-            elif etype == "response.function_call_arguments.delta":
-                idx = int(ev.get("output_index") or 0)
-                info = self._tools.setdefault(idx, {"id": f"call_{idx}", "name": None})
-                tc: dict[str, Any] = {
-                    "index": idx,
-                    "id": info["id"],
-                    "type": "function",
-                    "function": {"arguments": ev.get("delta") or ""},
-                }
-                if info.get("name"):
-                    tc["function"]["name"] = info["name"]
-                out.append(self._chunk({"delta": {"tool_calls": [tc]}, "finish_reason": None}))
-            elif etype in ("response.completed", "response.incomplete"):
-                resp = ev.get("response") or {}
-                u = resp.get("usage") or {}
-                prompt = int(u.get("input_tokens") or 0)
-                completion = int(u.get("output_tokens") or 0)
-                self.last_usage = {
-                    "prompt_tokens": prompt,
-                    "completion_tokens": completion,
-                    "total_tokens": int(u.get("total_tokens") or prompt + completion),
-                }
-                finish = "tool_calls" if self._tools else ("length" if etype == "response.incomplete" else "stop")
-                out.append(self._chunk({"delta": {}, "finish_reason": finish}, usage=self.last_usage))
-                out.append(b"data: [DONE]\n\n")
+        out: list[bytes] = []
+        lines = self._buffer.split("\n")
+        self._buffer = lines.pop()  # последняя (возможно, неполная) строка — в буфер
+        for line in lines:
+            out.extend(self._process_line(line.rstrip("\r")))
         return b"".join(out)
+
+    def flush(self) -> bytes:
+        """Дочистить буфер по окончании стрима (строка без завершающего \\n)."""
+        if not self._buffer.strip():
+            self._buffer = ""
+            return b""
+        line, self._buffer = self._buffer, ""
+        return b"".join(self._process_line(line.rstrip("\r")))
 
 
 class ResponsesLiveStream:
@@ -317,6 +343,9 @@ class ResponsesLiveStream:
             translated = self._translator.feed(chunk)
             if translated:
                 yield translated
+        tail = self._translator.flush()
+        if tail:
+            yield tail
 
     async def close(self) -> None:
         aclose = getattr(self._upstream, "aclose", None)

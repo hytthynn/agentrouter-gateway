@@ -129,6 +129,32 @@ def test_sse_translator():
     assert tr.last_usage["total_tokens"] == 9
 
 
+def test_sse_translator_split_packets():
+    """Событие, разрезанное между сетевыми пакетами (баг «stream ended without finish_reason»)."""
+    tr = ResponsesSSETranslator("gpt-5.6-sol")
+    tr.feed(_sse([{"type": "response.output_text.delta", "delta": "Привет"}]))
+    completed = _sse([
+        {"type": "response.completed",
+         "response": {"usage": {"input_tokens": 2, "output_tokens": 6, "total_tokens": 8}}},
+    ])
+    # разрезаем completed-событие пополам — строго посередине JSON
+    cut = len(completed) // 2
+    out1 = tr.feed(completed[:cut])
+    assert out1 == b""  # разрезанное событие не выдаётся
+    out2 = tr.feed(completed[cut:])
+    assert b'"finish_reason": "stop"' in out2 or b'"finish_reason":"stop"' in out2
+    assert b"[DONE]" in out2
+    assert tr.last_usage is not None and tr.last_usage["total_tokens"] == 8
+
+    # строка без завершающего \n в конце стрима — достаётся через flush()
+    tr2 = ResponsesSSETranslator("m")
+    raw = b'data: {"type": "response.completed", "response": {"usage": {"input_tokens": 1, "output_tokens": 1}}}'
+    tr2.feed(raw[:20])   # кусок события
+    tr2.feed(raw[20:])   # остаток — но строка не закрыта \n
+    tail = tr2.flush()
+    assert b'"finish_reason": "stop"' in tail or b'"finish_reason":"stop"' in tail
+
+
 def test_sse_translator_tool_calls():
     tr = ResponsesSSETranslator("m")
     tr.feed(_sse([
