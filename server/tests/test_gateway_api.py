@@ -228,7 +228,7 @@ async def test_client_abort_records_and_does_not_crash(client, fake_adapter, acc
 
     box = get_secret_box()
     async with database.make_session() as session:
-        key_row, key = await create_gateway_key(
+        key_row, _full = await create_gateway_key(
             session, box, name="abort", token_limit=None, expires_at=None, allowed_models=None
         )
         key_id = key_row.id
