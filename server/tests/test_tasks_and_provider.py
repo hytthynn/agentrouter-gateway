@@ -32,9 +32,10 @@ class _MutableLoginAdapter(FakeAdapterForUnavailable):
 
 
 def _make_account_with_session():
+    import json as _json
+
     from gateway_app.core.security import get_secret_box as _box
     from gateway_app.db import orm
-    import json as _json
 
     b = _box()
     return orm.Account(
