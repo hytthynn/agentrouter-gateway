@@ -1,5 +1,7 @@
 """Тесты каталога моделей (FR-4) и API аккаунтов/ключей (§7)."""
 
+import asyncio
+
 import pytest
 
 from gateway_app.core.security import get_secret_box
@@ -86,6 +88,7 @@ async def test_dashboard_aggregates(client, fake_adapter, account_with_key):
         headers={"Authorization": f"Bearer {key}"},
         json={"model": "glm-4.6", "messages": [{"role": "user", "content": "hello world test"}]},
     )
+    await asyncio.sleep(0.15)
     resp = await client.get("/api/dashboard")
     data = resp.json()["data"]
     assert data["accounts_total"] == 1
@@ -109,6 +112,7 @@ async def test_logs_filters(client, fake_adapter, account_with_key):
         headers={"Authorization": f"Bearer {key}"},
         json={"model": "glm-4.6", "messages": []},
     )
+    await asyncio.sleep(0.15)
     resp = await client.get("/api/logs/requests", params={"model": "glm"})
     items = resp.json()["data"]["items"]
     assert len(items) == 1

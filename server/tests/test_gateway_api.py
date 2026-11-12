@@ -1,5 +1,6 @@
 """Интеграционные тесты шлюза (FR-6): auth, 404 модели, accounting, failover 402, SSE."""
 
+import asyncio
 
 import pytest
 
@@ -59,7 +60,8 @@ async def test_chat_non_stream_accounting(client, fake_adapter, account_with_key
     assert body["choices"][0]["message"]["content"] == "Привет!"
     assert body["usage"]["total_tokens"] == 15
 
-    # accounting
+    await asyncio.sleep(0.15)  # accounting пишется фоновым таском
+
     from sqlmodel import select
 
     async with database.make_session() as session:
@@ -110,6 +112,7 @@ async def test_chat_failover_on_budget_pool(client, fake_adapter, account_with_k
     assert resp.status_code == 200  # failover на второй аккаунт успешен
     assert fake_adapter.calls[-1]["op"] == "chat"
 
+    await asyncio.sleep(0.15)
     from sqlmodel import select
 
     async with database.make_session() as session:
@@ -145,6 +148,7 @@ async def test_chat_stream_accounting(client, fake_adapter, account_with_key):
     assert resp.headers["content-type"].startswith("text/event-stream")
     assert b"data: " in resp.content
 
+    await asyncio.sleep(0.15)
     from sqlmodel import select
 
     async with database.make_session() as session:
@@ -194,3 +198,60 @@ def test_classify_waf():
     exc = ar_errors.classify_upstream_error(401, {"error": {"message": "Unauthorized client detected"}})
     assert isinstance(exc, ar_errors.WafBlockedError)
     assert ar_errors.is_retriable(exc)
+
+
+async def test_client_abort_records_and_does_not_crash(client, fake_adapter, account_with_key):
+    """Обрыв клиента (GeneratorExit у генератора стрима): строка client_abort дописывается
+    фоновым таском со своей сессией — пул БД не рвётся (§8.4, FR-6.6)."""
+    import time as _time
+
+    from gateway_app.gateway.router import _stream_response
+    from gateway_app.providers.base import UpstreamStream
+
+    class _SlowLive(UpstreamStream):
+        def __init__(s):
+            super().__init__(status=200, headers={}, _close=None)
+            s.last_usage = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+            s.completion_chars = 2
+
+        async def aiter_bytes(s):
+            first = b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+            yield first
+            await asyncio.sleep(30)  # висим — «клиент» закрывает генератор
+
+    class _Ctx:
+        exited = False
+
+        async def __aexit__(self, *exc):
+            self.exited = True
+            return None
+
+    box = get_secret_box()
+    async with database.make_session() as session:
+        key_row, key = await create_gateway_key(
+            session, box, name="abort", token_limit=None, expires_at=None, allowed_models=None
+        )
+        key_id = key_row.id
+
+    ctx = _Ctx()
+    response = _stream_response(
+        _SlowLive(), ctx, {"messages": []},
+        base={"gateway_key_id": key_id, "account_id": account_with_key.id,
+              "model": "glm-4.6", "attempts": [], "client_ua": "test"},
+        started=_time.monotonic(), on_finish=lambda: None,
+    )
+    gen = response.body_iterator
+    first = await gen.__anext__()
+    assert b"hi" in first
+    await gen.aclose()  # обрыв клиента (GeneratorExit в точке yield)
+
+    await asyncio.sleep(0.3)  # фоновый accounting + закрытие апстрима
+    from sqlmodel import select
+
+    async with database.make_session() as session:
+        logs = (
+            await session.exec(select(__import__("gateway_app.db.orm", fromlist=["RequestLog"]).RequestLog))
+        ).all()
+        assert len(logs) == 1
+        assert logs[0].status is RequestStatus.client_abort
+    assert ctx.exited is True

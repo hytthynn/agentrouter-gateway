@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gateway_app.api.deps import get_adapter
+from gateway_app.core.background import spawn
 from gateway_app.core.logging import get_logger
 from gateway_app.core.masking import mask_text
 from gateway_app.core.security import get_secret_box
@@ -196,6 +197,81 @@ async def get_model(model_id: str, request: Request) -> Any:
 # --------------------------------------------------------- chat/completions
 
 
+async def _close_session_safely(session: AsyncSession) -> None:
+    """Закрыть сессию даже при отмене таски запроса (клиент оборвал соединение).
+
+    CancelledError не глушим — протокол отмены должен соблюдаться; shield позволяет
+    close() доиграть в фоне, чтобы пул неterminate'ил подключение с ошибкой.
+    """
+    with contextlib.suppress(Exception):
+        await asyncio.shield(session.close())
+
+
+def _spawn_accounting(fields: dict[str, Any]) -> None:
+    """Accounting фоновым таском: не блокирует ответ и не рвётся при отмене запроса."""
+
+    async def _write() -> None:
+        s = make_session()
+        try:
+            await record_usage(s, **fields)
+        except Exception:
+            log.exception("Ошибка записи accounting")
+        finally:
+            with contextlib.suppress(Exception):
+                await s.close()
+
+    spawn(_write())
+
+
+def _record_response(
+    payload: dict[str, Any],
+    http_status: int,
+    body: dict[str, Any],
+    *,
+    started: float,
+    first_token_ms: int | None,
+    gateway_key_id: int | None,
+    account_id: int | None,
+    model: str,
+    stream: bool,
+    attempts: list[dict[str, Any]],
+    client_ua: str | None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    usage = (body or {}).get("usage") or {}
+    pt = int(usage.get("prompt_tokens") or 0)
+    ct = int(usage.get("completion_tokens") or 0)
+    est = pt == 0 and ct == 0
+    if est:
+        pt, ct = estimate_tokens(payload.get("messages"), 0)
+    cost_quota = usage.get("cost_quota") or usage.get("quota")
+    _spawn_accounting(
+        {
+            "gateway_key_id": gateway_key_id,
+            "account_id": account_id,
+            "model": model,
+            "stream": stream,
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "estimated": est,
+            "cost_quota": int(cost_quota) if cost_quota else None,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "first_token_ms": first_token_ms,
+            "http_status": http_status,
+            "attempts": attempts or None,
+            "client_ua": client_ua,
+            "error_code": error_code,
+            "error_message": error_message,
+        }
+    )
+
+
+async def _safe_stream_close(stream_ctx: Any) -> None:
+    with contextlib.suppress(Exception):
+        await stream_ctx.__aexit__(None, None, None)
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> Any:
     """Сценарий FR-6: auth → лимиты → роутинг → failover → SSE/JSON → accounting."""
@@ -246,7 +322,7 @@ async def chat_completions(request: Request) -> Any:
             defer.run()
             raise
     finally:
-        await session.close()
+        await _close_session_safely(session)
 
 
 async def _with_failover(
@@ -406,18 +482,7 @@ async def _with_failover(
                 resp = UpstreamResponse(
                     status=resp.status, body=responses_to_chat_response(resp.body)
                 )
-            await _record_response(
-                payload, resp.status, resp.body,
-                started=started, first_token_ms=None, **common,
-            )
-            defer.run()
-            return JSONResponse(status_code=200, content=resp.body)
-
-            # успех (не-стрим): accounting + passthrough
-            pk_row.last_used_at = utcnow()
-            session.add(pk_row)
-            await session.commit()
-            await _record_response(
+            _record_response(
                 payload, resp.status, resp.body,
                 started=started, first_token_ms=None, **common,
             )
@@ -436,47 +501,6 @@ async def _with_failover(
         f"Все попытки ({len(attempts)}) не удались: "
         + mask_text(str(last_exc) if last_exc else "неизвестно"),
     )
-
-
-async def _record_response(
-    payload: dict[str, Any],
-    http_status: int,
-    body: dict[str, Any],
-    *,
-    started: float,
-    first_token_ms: int | None,
-    gateway_key_id: int | None,
-    account_id: int | None,
-    model: str,
-    stream: bool,
-    attempts: list[dict[str, Any]],
-    client_ua: str | None,
-    error_code: str | None = None,
-    error_message: str | None = None,
-) -> None:
-    usage = (body or {}).get("usage") or {}
-    pt = int(usage.get("prompt_tokens") or 0)
-    ct = int(usage.get("completion_tokens") or 0)
-    est = pt == 0 and ct == 0
-    if est:
-        pt, ct = estimate_tokens(payload.get("messages"), 0)
-    cost_quota = usage.get("cost_quota") or usage.get("quota")
-    s = make_session()
-    try:
-        await record_usage(
-            s, gateway_key_id=gateway_key_id, account_id=account_id, model=model, stream=stream,
-            prompt_tokens=pt, completion_tokens=ct, estimated=est,
-            cost_quota=int(cost_quota) if cost_quota else None,
-            duration_ms=int((time.monotonic() - started) * 1000),
-            first_token_ms=first_token_ms,
-            http_status=http_status,
-            attempts=attempts or None,
-            client_ua=client_ua,
-            error_code=error_code,
-            error_message=error_message,
-        )
-    finally:
-        await s.close()
 
 
 def _stream_response(
@@ -524,25 +548,29 @@ def _stream_response(
                 if abort
                 else (orm.RequestStatus.error if error_chunk else orm.RequestStatus.success)
             )
-            s = make_session()
-            try:
-                await record_usage(
-                    s, gateway_key_id=base["gateway_key_id"], account_id=base["account_id"],
-                    model=base["model"], stream=True,
-                    prompt_tokens=pt, completion_tokens=ct, estimated=est,
-                    cost_quota=int(cost) if cost else None,
-                    duration_ms=duration, first_token_ms=ttft, status=status,
-                    http_status=None if abort else getattr(live, "status", None),
-                    error_code="upstream_error" if error_chunk else None,
-                    error_message=mask_text(error_chunk) if error_chunk else None,
-                    attempts=base["attempts"] or None,
-                    client_ua=base.get("client_ua"),
-                )
-            finally:
-                await s.close()
-                with contextlib.suppress(Exception):
-                    await stream_ctx.__aexit__(None, None, None)
-                on_finish()
+            # accounting фоном: не блокируем закрытие генератора и не рвёмся при отмене
+            _spawn_accounting(
+                {
+                    "gateway_key_id": base["gateway_key_id"],
+                    "account_id": base["account_id"],
+                    "model": base["model"],
+                    "stream": True,
+                    "prompt_tokens": pt,
+                    "completion_tokens": ct,
+                    "estimated": est,
+                    "cost_quota": int(cost) if cost else None,
+                    "duration_ms": duration,
+                    "first_token_ms": ttft,
+                    "status": status,
+                    "http_status": None if abort else getattr(live, "status", None),
+                    "attempts": base["attempts"] or None,
+                    "client_ua": base.get("client_ua"),
+                    "error_code": "upstream_error" if error_chunk else None,
+                    "error_message": mask_text(error_chunk) if error_chunk else None,
+                }
+            )
+            spawn(_safe_stream_close(stream_ctx))
+            on_finish()
 
     return StreamingResponse(
         gen(),
