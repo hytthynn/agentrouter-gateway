@@ -19,6 +19,34 @@ class FakeAdapterForUnavailable:
         return UserSelf(id=1, username="u", quota=100, used_quota=0, request_count=0, group=None)
 
 
+class _MutableLoginAdapter(FakeAdapterForUnavailable):
+    """Форк-механика: POST 404 (unavailable); баланс растёт после «входа»."""
+
+    def __init__(self) -> None:
+        self.quota = 100
+
+    async def get_user_self(self, creds):
+        from gateway_app.providers.base import UserSelf
+
+        return UserSelf(id=1, username="u", quota=self.quota, used_quota=0, request_count=0, group=None)
+
+
+def _make_account_with_session():
+    from gateway_app.core.security import get_secret_box as _box
+    from gateway_app.db import orm
+    import json as _json
+
+    b = _box()
+    return orm.Account(
+        name="acc", base_url="https://x", github_login="u",
+        github_password_enc=b.encrypt("github_password_enc", "pw"),
+        totp_secret_enc=b.encrypt("totp_secret_enc", "JBSWY3DPEHPK3PXP"),
+        system_token_enc=b.encrypt("system_token_enc", "sys-token"),
+        session_enc=b.encrypt("session_enc", _json.dumps({"session_cookie": "c", "storage_state": {}})),
+        status=orm.AccountStatus.active, created_at=orm.utcnow(),
+    )
+
+
 async def test_checkin_unavailable_is_info_not_error(seeded_db):
     from gateway_app.core.security import get_secret_box
     from gateway_app.core.security import get_secret_box as _box
@@ -46,6 +74,62 @@ async def test_checkin_unavailable_is_info_not_error(seeded_db):
         logs = await query_system_logs(session, category="checkin", page=1, page_size=5)
         assert logs["items"], "info-лог должен быть записан"
         assert logs["items"][0]["level"] == "info"
+
+
+async def test_checkin_via_login_success(seeded_db, monkeypatch):
+    """Форк: бонус зачисляется при входе → re-login = чек-ин; дельта → success."""
+    from gateway_app.core.security import get_secret_box
+    from gateway_app.db import database
+    from gateway_app.domain.checkin import service as checkin_service
+
+    adapter = _MutableLoginAdapter()
+
+    async def fake_relogin_flow(task, session_factory, adapter_, account_id):
+        adapter.quota += 12_500_000  # бонус $25 при входе
+        return {"account_id": account_id}
+
+    monkeypatch.setattr(checkin_service, "relogin_flow", fake_relogin_flow)
+
+    async with database.make_session() as session:
+        acc = _make_account_with_session()
+        session.add(acc)
+        await session.commit()
+        await session.refresh(acc)
+        result = await checkin_service.run_checkin(
+            session, adapter, get_secret_box(), acc, relogin_after=True
+        )
+        assert result["status"] == "success"
+        assert result["delta_quota"] == 12_500_000
+        assert result["reward_usd"] == 25.0
+
+
+async def test_checkin_via_login_already_today(seeded_db, monkeypatch):
+    """Дельта 0 после входа → bonus за сегодня уже зачтён (already, не ошибка)."""
+    from gateway_app.core.security import get_secret_box
+    from gateway_app.db import database
+    from gateway_app.domain.checkin import service as checkin_service
+
+    adapter = _MutableLoginAdapter()
+
+    async def fake_relogin_flow(task, session_factory, adapter_, account_id):
+        return {"account_id": account_id}  # вход без начисления
+
+    monkeypatch.setattr(checkin_service, "relogin_flow", fake_relogin_flow)
+
+    async with database.make_session() as session:
+        acc = _make_account_with_session()
+        session.add(acc)
+        await session.commit()
+        await session.refresh(acc)
+        result = await checkin_service.run_checkin(
+            session, adapter, get_secret_box(), acc, relogin_after=True
+        )
+        assert result["status"] == "already"
+        # ранняя блокировка «уже сегодня» при повторном запуске
+        result2 = await checkin_service.run_checkin(
+            session, adapter, get_secret_box(), acc, relogin_after=True
+        )
+        assert result2["status"] == "already"
 
 
 async def test_task_lifecycle():

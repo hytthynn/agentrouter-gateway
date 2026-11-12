@@ -50,9 +50,23 @@ async def run_checkin(
     *,
     relogin_after: bool,
 ) -> dict[str, Any]:
-    """FR-8.3: POST чек-ин → re-login → GET user/self → награда/дельта. «Уже» — info (не ошибка)."""
+    """FR-8.3: POST чек-ин → re-login → GET user/self → награда/дельта. «Уже» — info (не ошибка).
+
+    Runtime-discovery (§2.6): форк AgentRouter не имеет POST-эндпоинта чек-ина — бонус
+    засчитывается при самом входе («签到成功» на логине, FAQ: «нужно перелогиниться, чтобы
+    зачислилось»). Если POST-кандидаты 404 → выполняем re-login как чек-ин и меряем дельту.
+    """
     if account.status not in (orm.AccountStatus.active, orm.AccountStatus.needs_relogin):
         return {"status": "skipped", "reason": f"статус {account.status.value}"}
+
+    # Уже чекинились сегодня (локальная дата) — не долбим провайдера и не перелогиниваемся
+    if account.last_checkin_at is not None and account.last_checkin_at.date() == utcnow().date():
+        await log_system(
+            session, "info", "checkin",
+            f"{account.name}: чек-ин сегодня уже выполнялся (в {account.last_checkin_at:%H:%M})",
+            account_id=account.id,
+        )
+        return {"status": "already", "message": "чек-ин сегодня уже выполнялся"}
 
     creds = creds_of(box, account)
 
@@ -88,11 +102,7 @@ async def run_checkin(
         await _cache_checkin_path(session, outcome.path)  # §2.6 п.3 — кэш найденного эндпоинта
 
     if outcome.unavailable:
-        await log_system(
-            session, "info", "checkin", f"{account.name}: {outcome.message}",
-            account_id=account.id,
-        )
-        return {"status": "unavailable", "message": outcome.message}
+        return await _checkin_via_login(session, adapter, box, account, before, relogin_after)
 
     if outcome.already_done:
         await log_system(
@@ -170,6 +180,89 @@ async def run_checkin_by_id(
 ) -> dict[str, Any]:
     account = await get_account(session, account_id)
     return await run_checkin(session, adapter, box, account, relogin_after=relogin_after)
+
+
+async def _checkin_via_login(
+    session: AsyncSession,
+    adapter: ProviderAdapter,
+    box: SecretBox,
+    account: orm.Account,
+    before: Any,
+    relogin_after: bool,
+) -> dict[str, Any]:
+    """Механика форка: бонус зачисляется при самом входе (проверено по бандлу консоли).
+
+    Делаем re-login — это и есть чек-ин; дельта баланса решает success/already.
+    """
+    if not relogin_after:
+        msg = (
+            "Чек-ин у провайдера засчитывается при входе (эндпоинт не реализован); "
+            "включите «Re-login после чек-ина» в настройках"
+        )
+        await log_system(session, "info", "checkin", f"{account.name}: {msg}", account_id=account.id)
+        return {"status": "unavailable", "message": msg}
+    if not account.session_enc:
+        msg = (
+            "Чек-ин у провайдера засчитывается при входе; сессии нет — "
+            "выполните «Перелогин» на карточке аккаунта"
+        )
+        await log_system(session, "info", "checkin", f"{account.name}: {msg}", account_id=account.id)
+        return {"status": "unavailable", "message": msg}
+
+    try:
+        task = AutomationTask(kind="checkin_login", account_id=account.id)
+        await relogin_flow(task, make_session, adapter, account.id)  # type: ignore[arg-type]
+    except Exception as exc:
+        await log_system(
+            session, "warn", "checkin",
+            f"{account.name}: перелогин (чек-ин через вход) не удался: {exc}",
+            account_id=account.id,
+        )
+        return {"status": "error", "reason": f"перелогин не удался: {str(exc)[:200]}"}
+
+    # Баланс после + дельта
+    delta_quota: int | None = None
+    try:
+        after = await adapter.get_user_self(creds_of(box, account))
+        if before is not None and before.quota is not None and after.quota is not None:
+            delta_quota = after.quota - before.quota
+        account.balance_quota = after.quota
+        account.used_quota = after.used_quota
+        account.balance_usd = quota_to_usd(after.quota)
+        account.last_balance_at = utcnow()
+    except Exception as exc:
+        await log_system(
+            session, "warn", "checkin", f"{account.name}: баланс после перелогина не прочитан: {exc}",
+            account_id=account.id,
+        )
+
+    account.last_checkin_at = utcnow()
+    account.last_checkin_reward_usd = (
+        round(delta_quota / QUOTA_PER_UNIT, 2) if delta_quota is not None and delta_quota > 0 else 0.0
+    )
+    account.updated_at = utcnow()
+    session.add(account)
+    await session.commit()
+
+    if delta_quota is not None and delta_quota > 0:
+        msg = (
+            f"{account.name}: чек-ин через вход успешен, "
+            f"дельта {delta_quota} quota (+${quota_to_usd(delta_quota)})"
+        )
+        await log_system(session, "info", "checkin", msg, account_id=account.id)
+        return {
+            "status": "success",
+            "message": "чек-ин зачтён при входе",
+            "delta_quota": delta_quota,
+            "reward_usd": account.last_checkin_reward_usd,
+        }
+
+    msg = (
+        f"{account.name}: перелогин выполнен; бонус за сегодня уже был зачтён при входе "
+        "(дельта 0) — следующий чек-ин при завтрашнем входе"
+    )
+    await log_system(session, "info", "checkin", msg, account_id=account.id)
+    return {"status": "already", "message": "бонус за сегодня уже зачтён при входе"}
 
 
 async def run_checkin_all(
