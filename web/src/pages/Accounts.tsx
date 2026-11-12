@@ -33,7 +33,9 @@ export default function AccountsPage() {
 
   const act = useMutation({
     mutationFn: ({ id, action }: { id: number; action: string }) =>
-      api<{ status?: string }>(`/api/accounts/${id}/${action}`, { method: "POST" }),
+      api<{ status?: string; message?: string }>(`/api/accounts/${id}/${action}`, {
+        method: "POST",
+      }),
     onSuccess: (data, vars) => {
       invalidate();
       if (vars.action === "checkin") {
